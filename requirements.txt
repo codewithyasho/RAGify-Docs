@@ -1,0 +1,17 @@
+langchain 
+langchain-community 
+langgraph 
+python-dotenv 
+langchain-groq 
+langchain-ollama
+streamlit
+langchain-classic
+langchain-text-splitters
+beautifulsoup4 
+lxml
+tqdm
+ipywidgets
+hf_xet
+nest_asyncio
+langchain-huggingface 
+sentence_transformers
