@@ -1,204 +1,169 @@
-"""
-RAGify Docs - A Developers Tool
-Transform documentation into intelligent, queryable knowledge
-"""
-
 import streamlit as st
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+import warnings
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from langchain_community.document_loaders import RecursiveUrlLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
-from langchain_classic.chains import create_retrieval_chain
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.documents import Document
 from langchain_ollama import ChatOllama
-from langchain_groq import ChatGroq
-from dotenv import load_dotenv
-from bs4 import BeautifulSoup
-import re
-
-load_dotenv()
-
-
-def bs4_extractor(html: str) -> str:
-    """Extract text from HTML using BeautifulSoup"""
-    soup = BeautifulSoup(html, "lxml")
-    return re.sub(r"\n\n+", "\n\n", soup.text).strip()
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain_classic.chains import create_retrieval_chain
 
 
 # Page configuration
 st.set_page_config(
     page_title="RAGify Docs | A Developers Tool",
-    page_icon="🕷️",
+    page_icon="📚",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("⚡ RAGify Docs")
+st.title("RAGify Docs")
 st.markdown(
     "**_A Developers Tool_** — Scrape entire documentation recursively and ask questions using AI")
 st.markdown("---")
 
-# Initialize session state
-if "rag_chain" not in st.session_state:
-    st.session_state.rag_chain = None
-if "scraped_url" not in st.session_state:
-    st.session_state.scraped_url = None
+# Suppress warnings for cleaner logs
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+
+# --- 2. SESSION STATE SETUP ---
+# We use session_state to keep variables alive when the app re-runs
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "vector_store" not in st.session_state:
+    st.session_state.vector_store = None
+if "rag_chain" not in st.session_state:
+    st.session_state.rag_chain = None
 
-
-# Sidebar for URL input
+# --- 3. SIDEBAR SETTINGS ---
 with st.sidebar:
-    st.header("📚 Documentation Link")
-
+    st.header("Documentation Link")
     website_url = st.text_input(
-        "Paste documentation root URL:",
-        placeholder="https://docs.example.com",
-        help="Enter the main URL (e.g., Get Started, Overview, Welcome page)"
-    )
+        "Paste the documentation URL:", placeholder="https://docs.langchain.com/oss/python/langchain/overview")
 
-    scrape_button = st.button("🔄 RAGify This Docs", use_container_width=True)
+    scrape_btn = st.button("RAGify This Docs", type="primary")
 
-
-# Main content area
-if scrape_button and website_url:
-    if st.session_state.scraped_url != website_url or st.session_state.rag_chain is None:
-        try:
-            with st.spinner("🔄 Scraping website..."):
-                # Load documents
-                loader = RecursiveUrlLoader(
-                    website_url,
-                    extractor=bs4_extractor
-                )
-                web_pages = []
-                for doc in loader.lazy_load():
-                    web_pages.append(doc)
-
-                st.success(f"✅ Scraped {len(web_pages)} pages")
-
-            # Convert to string
-            web_page_content = "\n\n".join(
-                [page.page_content for page in web_pages])
-
-            with st.spinner("✂️ Splitting text..."):
-                # Text splitting
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=1200,
-                    chunk_overlap=200
-                )
-                splitted_content = text_splitter.split_text(web_page_content)
-                st.success(f"✅ Created {len(splitted_content)} chunks")
-
-            with st.spinner("🧠 Creating embeddings..."):
-                # Embeddings
-                embeddings = HuggingFaceEmbeddings(
-                    model_name="sentence-transformers/all-MiniLM-L6-v2"
-                )
-
-                # Convert to documents
-                list_of_documents = [
-                    Document(page_content=text) for text in splitted_content
-                ]
-
-                # Vector store
-                vector_store = InMemoryVectorStore.from_documents(
-                    documents=list_of_documents,
-                    embedding=embeddings
-                )
-                st.success("✅ Vector store created")
-
-            # Retriever
-            retriever = vector_store.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 5}
-            )
-
-            # LLM
-            llm = ChatGroq(
-                model="openai/gpt-oss-120b",
-                temperature=0.2,
-                reasoning_effort=None,
-                reasoning_format=None,
-                verbose=False
-            )
-
-            # Prompt
-            prompt = ChatPromptTemplate.from_template(
-                """
-                You are a helpful and factual AI assistant.
-                Use the following retrieved context to answer the user's question.
-                If the answer is not found in the context, reply with:
-                "I'm not sure based on the provided information." DONT MAKE UP ANSWERS.
-
-                <context>
-                {context}
-                </context>
-
-                Question: {input}
-                """
-            )
-
-            # Chains
-            document_chain = create_stuff_documents_chain(llm, prompt)
-            rag_chain = create_retrieval_chain(retriever, document_chain)
-
-            # Store in session state
-            st.session_state.rag_chain = rag_chain
-            st.session_state.scraped_url = website_url
-            st.session_state.chat_history = []
-
-        except Exception as e:
-            st.error(f"❌ Error during scraping: {str(e)}")
+# --- 4. CORE FUNCTIONS ---
 
 
-# Chat interface
-if st.session_state.rag_chain is not None:
-    st.markdown("---")
-    st.subheader("💬 Ask Questions")
+@st.cache_resource
+def get_embeddings():
+    # Cached so we don't reload the heavy model on every interaction
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-    # Display chat history
-    for message in st.session_state.chat_history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
 
-    # User input
-    user_question = st.chat_input(
-        "Ask a question about the scraped documentation...",
-        key="user_input"
-    )
+def get_bs4_extractor(html: str) -> str:
+    soup = BeautifulSoup(html, "lxml")
+    # Remove excessive newlines for cleaner text
+    return soup.text.strip()
 
-    if user_question:
-        # Add user message to history
-        st.session_state.chat_history.append({
-            "role": "user",
-            "content": user_question
-        })
 
-        # Display user message
+# --- 5. MAIN LOGIC: SCRAPING ---
+if scrape_btn:
+    # Initialize resources
+    embeddings = get_embeddings()
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000, chunk_overlap=200)
+    loader = RecursiveUrlLoader(website_url, extractor=get_bs4_extractor)
+
+    all_chunks = []
+
+    # VISUAL FEEDBACK: We use st.status to show the loop progress
+    with st.status("🚀 Scraping and Chunking...", expanded=True) as status:
+        st.write("Initializing loader...")
+
+        # THE "BEST" STREAMING METHOD:
+        # We iterate manually to update the UI and save memory
+        count = 0
+        for doc in loader.lazy_load():
+            chunks = text_splitter.split_documents([doc])
+            all_chunks.extend(chunks)  # Flattens the list efficiently
+
+            # Update UI every few pages so it doesn't flicker too much
+            count += 1
+            if count % 1 == 0:
+                st.write(
+                    f"📄 Processed: {doc.metadata.get('source', 'Unknown Page')}")
+
+        st.write(f"✅ Scraping Complete! Found {len(all_chunks)} chunks.")
+        st.write("🧠 Building Vector Index (this may take a moment)...")
+
+        # Create Vector Store
+        vector_store = InMemoryVectorStore.from_documents(
+            documents=all_chunks,
+            embedding=embeddings
+        )
+
+        # Create Retriever (MMR for diversity)
+        retriever = vector_store.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": 5, "fetch_k": 10, "lambda_mult": 0.5}
+        )
+
+        # Create LLM & Chain
+        llm = ChatOllama(model="deepseek-v3.1:671b-cloud", temperature=0.2)
+
+        prompt = ChatPromptTemplate.from_template("""
+            You are a helpful and factual AI assistant.
+            Use the following retrieved context to answer the user's question.
+            If the answer is not found in the context, reply with:
+            "I'm not sure based on the provided information."
+            
+            <context>
+            {context}
+            </context>
+            
+            Question: {input}
+        """)
+
+        document_chain = create_stuff_documents_chain(llm, prompt)
+        rag_chain = create_retrieval_chain(retriever, document_chain)
+
+        # Save everything to session state
+        st.session_state.rag_chain = rag_chain
+        st.session_state.vector_store = vector_store
+
+        status.update(label="✅ Knowledge Base Ready!",
+                      state="complete", expanded=False)
+
+# --- 6. CHAT INTERFACE ---
+
+# Display previous chat history
+for message in st.session_state.chat_history:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# Chat Input
+if user_input := st.chat_input("Ask a question about the docs..."):
+    if not st.session_state.rag_chain:
+        st.error("⚠️ Please build the Knowledge Base first using the sidebar!")
+    else:
+        # User Message
+        st.session_state.chat_history.append(
+            {"role": "user", "content": user_input})
         with st.chat_message("user"):
-            st.markdown(user_question)
+            st.markdown(user_input)
 
-        # Get AI response
-        with st.spinner("🤔 Thinking..."):
-            try:
+        # AI Response
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
                 response = st.session_state.rag_chain.invoke(
-                    {"input": user_question})
-                ai_answer = response["answer"]
+                    {"input": user_input})
+                answer = response["answer"]
 
-                # Add AI message to history
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": ai_answer
-                })
+                # Extract Sources
+                sources = {doc.metadata.get('source')
+                           for doc in response['context']}
+                source_text = "\n\n**📍 Sources:**\n" + \
+                    "\n".join([f"- {s}" for s in sources])
 
-                # Display AI message
-                with st.chat_message("assistant"):
-                    st.markdown(ai_answer)
+                final_response = answer + source_text
+                st.markdown(final_response)
 
-            except Exception as e:
-                st.error(f"❌ Error generating response: {str(e)}")
+        # Save AI Message
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": final_response})
 
 else:
     st.info("👈 Paste a documentation URL in the sidebar and click 'RAGify This Docs' to transform it into an AI-powered knowledge base!")
