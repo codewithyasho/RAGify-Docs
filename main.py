@@ -1,6 +1,6 @@
 """
 RAGify Docs - A Developers Tool
-Transform documentation into intelligent, queryable knowledge
+A Developers Tool — Scrape entire documentation recursively and ask questions using AI
 """
 
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
