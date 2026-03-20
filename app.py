@@ -5,7 +5,7 @@ from langchain_community.document_loaders import RecursiveUrlLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_core.vectorstores import InMemoryVectorStore
-from langchain_ollama import ChatOllama
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_classic.chains import create_retrieval_chain
@@ -102,7 +102,7 @@ if scrape_btn:
         )
 
         # Create LLM & Chain
-        llm = ChatOllama(model="deepseek-v3.1:671b-cloud", temperature=0.2)
+        llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0.2)
 
         prompt = ChatPromptTemplate.from_template("""
             You are a helpful and factual AI assistant.
